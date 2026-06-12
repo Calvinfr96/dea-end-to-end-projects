@@ -1,0 +1,102 @@
+USE ROLE ACCOUNTADMIN;
+USE WAREHOUSE COMPUTE_WH;
+
+CREATE OR REPLACE DATABASE WALMART_DB;
+USE SCHEMA WALMART_DB.PUBLIC;
+
+-- Create Storage Integration to connect Snowflake with S3 bucket
+CREATE OR REPLACE STORAGE INTEGRATION S3_INT
+    TYPE = EXTERNAL_STAGE
+    STORAGE_PROVIDER = 'S3'
+    ENABLED = TRUE
+    STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::515424600331:role/walmart_analysis_snowpipe_role'
+    STORAGE_ALLOWED_LOCATIONS = ('s3://walmart-analysis-calvinfr/data/');
+
+DESCRIBE STORAGE INTEGRATION S3_INT; -- Retrieve STORAGE_AWS_IAM_USER_ARN and STORAGE_AWS_EXTERNAL_ID values for IAM role.
+
+-- Create CSV File Format for Snowpipes
+CREATE OR REPLACE FILE FORMAT MY_CSV_FORMAT
+  TYPE = CSV
+  FIELD_DELIMITER = ','
+  FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+  SKIP_HEADER = 1
+  NULL_IF = ('NA', 'na')
+  EMPTY_FIELD_AS_NULL = true;
+
+-- Create Stages for Each Subfolder in the 'data' Directory
+CREATE OR REPLACE STAGE WALMART_DB.PUBLIC.S3_DEPARTMENTS_STAGE
+    STORAGE_INTEGRATION = S3_INT
+    URL = 's3://walmart-analysis-calvinfr/data/departments_1/';
+
+CREATE OR REPLACE STAGE WALMART_DB.PUBLIC.S3_STORES_STAGE
+    STORAGE_INTEGRATION = S3_INT
+    URL = 's3://walmart-analysis-calvinfr/data/stores_1/';
+
+CREATE OR REPLACE STAGE WALMART_DB.PUBLIC.S3_FACTS_STAGE
+    STORAGE_INTEGRATION = S3_INT
+    URL = 's3://walmart-analysis-calvinfr/data/facts_1/';
+
+-- Create dim and fact tables
+CREATE OR REPLACE TABLE WALMART_DB.PUBLIC.DEPARTMENTS_SOURCE
+(
+    Store INT,
+    Dept INT,
+    Date DATE,
+    Weekly_Sales DECIMAL(10, 2),
+    IsHoliday BOOLEAN
+);
+
+CREATE OR REPLACE TABLE WALMART_DB.PUBLIC.STORES_SOURCE
+(
+    Store INT,
+    Type STRING,
+    Size INT
+);
+
+-- Create Snowpipes
+CREATE OR REPLACE PIPE WALMART_DB.PUBLIC.DEPARTMENTS_PIPE 
+AUTO_INGEST = TRUE AS
+COPY INTO WALMART_DB.PUBLIC.DEPARTMENTS_SOURCE (Store, Dept, Date, Weekly_Sales, IsHoliday)
+FROM 
+(
+    SELECT
+        $1,
+        $2,
+        $3,
+        $4,
+        $5
+    FROM @WALMART_DB.PUBLIC.S3_DEPARTMENTS_STAGE
+)
+FILE_FORMAT = WALMART_DB.PUBLIC.MY_CSV_FORMAT;
+
+CREATE OR REPLACE PIPE WALMART_DB.PUBLIC.STORES_PIPE 
+AUTO_INGEST = TRUE AS
+COPY INTO WALMART_DB.PUBLIC.STORES_SOURCE (Store, Type, Size)
+FROM 
+(
+    SELECT
+        $1,
+        $2,
+        $3
+    FROM @WALMART_DB.PUBLIC.S3_STORES_STAGE
+)
+FILE_FORMAT = WALMART_DB.PUBLIC.MY_CSV_FORMAT;
+
+SELECT SYSTEM$PIPE_STATUS('WALMART_DB.PUBLIC.DEPARTMENTS_PIPE'); -- Check if the pipes are running
+SELECT SYSTEM$PIPE_STATUS('WALMART_DB.PUBLIC.STORES_PIPE'); -- Check if the pipes are running
+-- SELECT SYSTEM$PIPE_STATUS('WALMART_DB.PUBLIC.FACTS_PIPE'); -- Check if the pipes are running
+SHOW PIPES; -- Check the status of snowpipes
+
+
+
+
+-- Troubleshooting
+SELECT * FROM WALMART_DB.PUBLIC.DEPARTMENTS_SOURCE; -- A store's weekly sales figures by department
+SELECT * FROM WALMART_DB.PUBLIC.STORES_SOURCE; -- A store's basic information, including type and size
+-- SELECT * FROM WALMART_DB.PUBLIC.FACTS_SOURCE; -- Facts, such as temperature and fuel price, for a store on a particular day
+
+SELECT $1, $2, $3 FROM @WALMART_DB.PUBLIC.S3_STORES_STAGE;
+
+SELECT * FROM WALMART_DB.ANALYTICS.WEEKLY_SALES_STORE_TYPE_MONTH;
+
+DROP TABLE WALMART_DB.ANALYTICS.WEEKLY_SALES_BY_MONTH;
