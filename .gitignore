@@ -3,3 +3,4 @@ bin/
 lib/
 .venv/
 *.cfg
+.DS_Store
