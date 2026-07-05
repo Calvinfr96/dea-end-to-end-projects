@@ -16,6 +16,9 @@ Design a pipeline architecture for ingesting, transforming, and storing data. De
 - Designed primarily using AWS resources.
 - Implement logic using PySpark.
 
+Architecture Diagram:
+![](/restaurant_business_performance_analysis/architecture_diagram.png)
+
 **Stramlit App URL:** https://dea-restaurant-metrics-analytics-calvinfr.streamlit.app/
 
 **Streamlit App Repo:** https://github.com/Calvinfr96/dea-streamlit-restaurant-metrics-analytics

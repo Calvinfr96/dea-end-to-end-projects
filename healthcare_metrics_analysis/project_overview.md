@@ -19,6 +19,9 @@ This project will use AWS services to build a unified view of hospital staffing 
         - Facility performance metrics, such as occupancy rates.
         - Visualizations, such as bar charts and heat maps.
 
+Architecture Diagram:
+![](/healthcare_metrics_analysis/architecture_diagram.png)
+
 - **Stramlit App URL:** https://dea-healthcare-metrics-analytics-calvinfr.streamlit.app/
 - **Streamlit App Repo:** https://github.com/Calvinfr96/dea-streamlit-healthcare-metrics-analytics
 
