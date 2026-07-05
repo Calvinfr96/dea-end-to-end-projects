@@ -1,0 +1,327 @@
+# Restaurant Business Performance Analysis Project Summary
+
+## AWS RDS
+- Create a `restaurant-business-analytics` MySQL database using the sandbox configuration (to minimize costs).
+    - Ensure public access is enabled in order to connect the database with MySQL Workbench.
+    - Choose the default VPC that comes with your AWS account.
+    - Choose `us-east-1` as the availability zone.
+    - Disable enhanced monitoring.
+
+## AWS S3
+- Create a `restaurant-analysis-calvinfr` bucket to store the data that will be migrated from RDS to S3 using a Glue Python Shell script. Use the default settings.
+    - Create a `/gold/sales_performance` directory to store the transformed data.
+
+## AWS IAM
+- Create a `Glue-RDS-S3-Execution-Role` IAM role to establish a connection between AWS Glue, RDS, and S3:
+    - Select AWS Service as the trusted entity and choose AWS Glue.
+    - Add the following AWS-Managed policies:
+        - AWSGlueServiceRole
+        - AmazonRDSReadOnlyAccess
+        - SecretsManagerReadWrite
+    - After the role is created, attach an inline policy with the following permissions:
+        - s3:PutObject
+        - s3:GetObject
+        - s3:DeleteObject
+        - s3:ListBucket
+- Create a `streamlit-restaurant-app-user` IAM user to give Streamlit the permissions necessary to query parquet data from S3.
+    - Add the following permissions to the user as an inline policy:
+        - s3:ListBucket
+        - s3:GetObject
+        - S3 Bucket ARN: arn:aws:s3:::restaurant-analysis-calvinfr
+        - S3 Bucket Path: arn:aws:s3:::restaurant-analysis-calvinfr/*
+
+## AWS Secrets Manager
+- Create a `production/restaurant-analysis/rds/mysql` secret to securely store the RDS database credentials.
+    - Choose 'Credentials for Amazon RDS database' as the secret type.
+    - Enter the database username and password.
+    - Select the relevant RDS database.
+
+## AWS VPC
+- Under the security group used to create the RDS database, add a self-referencing inbound rule with the following properties:
+    - Type: MySQL/Aurora
+    - Protocol: TCP
+    - Port: 3306
+    - Source: Custom
+    - Source Value: The security group ID
+- Create 3 VPC endpoints that will allow the Glue job to talk to the necessary AWS services:
+    - Chose AWS Services as the type.
+    - Choose the service name `com.amazonaws.<region>.s3` with the Gateway type.
+    - Choose the service name `com.amazonaws.<region>.sts` with the Interface type.
+    - Choose the service name `com.amazonaws.<region>.secretsmanager` with the Interface type.
+    - Select the database VPC ID.
+    - Select the subnets associated with the database.
+    - Check the box next to the VPC's route table.
+
+## AWS Glue
+- Create an `rds-glue-connection` Connection with the following settings:
+    - Data Source: MySQL
+    - Database Instance: Relevant RDS database
+    - Credential Type: AWS Secrets Manager
+    - Select the relevant secret that holds the database credentials.
+    - Select the IAM role with the necessary permissions.
+    - Select the appropriate VPC and Security Group.
+- Create an `rds-restaurant-crawler` to inspect your MySQL database and automatically build your data schemas in the AWS Glue Data Catalog.
+    - Add a MySQL data source (the same type used to create the Glue connection).
+    - Specify the path as `raw/%`, which includes all tables in the database (`raw` is the name of the database schema created in MySQL Workbench).
+    - Choose the `Glue-RDS-S3-Execution-Role` IAM role, which has the necessary Glue and Secrets Manager permissions.
+    - Create and choose a `rds_restaurant_db` Glue database to store the data from RDS.
+    - Under Advanced options (Set output and scheduling), ensure 'Update the table definition in the data catalog' is selected.
+    - Once created, run the crawler. Once the crawler finishes, the three tables from the RDS database will be populated in the Glue database.
+- Create the `rds-to-gold-sales-pipeline` ETL job to transfer data from Glue to S3:
+    - The Bronze and Silver layers will be skipped in this pipeline because the volume of data is relatively small. Skipping Bronze and Gold also simplifies implementation and reduces costs.
+    - Change the name in the top left corner from `Untitled` to `rds-to-gold-sales-pipeline`.
+    - Create a `Source_Order_Items` source, selecting the appropriate database and table.
+    - Create a `Source_Item_Options` source, selecting the appropriate database and table.
+    - Create a `Source_Date_Dim` source, selecting the appropriate database and table.
+    - Create a `Transform_Sales_Data` transform (custom code), selecting the node parents as the three previously created sources.
+        - Use the code from `transform_sales_data.py`.
+    - Create a `Extract_Sales_Table` SelectFromCollection node, selecting the node parent as `Transform_Sales_Data`.
+        - Select Index 0 (the script only returns a single DynamicFrame inside the DynamicFrameCollection).
+    - Create a `Target_Gold_S3` target, selecting the node parent as `Transform_Sales_Data`.
+        - Format: Parquet
+        - Compression Type: Snappy
+        - S3 Target Location: `s3://restaurant-analysis-calvinfr/gold/sales_performance/`
+    - Under Job Details, configure the following settings:
+        - IAM Role: `Glue-RDS-S3-Execution-Role`
+        - Language: Python 3
+        - Worker Type: G1X (smallest type available)
+        - Requested Number of Workers: 2
+        - Job Timeout: 15 minutes
+    - Click Save.
+- Create a `nightly-restaurant-sales-trigger` Glue Trigger, which will automatically run the PySpark job every night, extracting data from RDS, transforming it, and loading it into S3 in Parquet format.
+    - Trigger Type: Scheduled
+    - Trigger Schedule: Cron Expression (`0 2 * * ? *`, which is 2AM UTC)
+    - Description: Automated nightly run to process restaurant order and options data into the S3 Gold layer.
+    - Chose the `rds-to-gold-sales-pipeline` ETL job.
+- Once the trigger is created, activate it.
+
+### Glue Troubleshooting
+- Ran into problems when running the job:
+    - Error Category: UNCLASSIFIED_ERROR; Failed Line Number: 206; An error occurred while calling o156.getCatalogSource. We don't support this connection type: MYSQL
+    - Fix: Delete the three original source nodes and update the script in `Transform_Sales_Data` (Derived from `transform_sales_data.py`) to read directly from RDS. This requires switching the Glue gob from visual mode to script-only mode and updating the script to handle this change.
+
+## My SQL Workbench
+- Connect the RDS database using the username and password configured when it was created. Once the connection is established, create a `raw` schema that will be used to upload the raw data using the CSV files: `CREATE SCHEMA IF NOT EXISTS raw`.
+    - Refresh the connection to show the newly created schema.
+    - Add the following line under 'Others' in Advanced connection settings: `OPT_LOCAL_INFILE=1`. This will allow the server to create tables based on locally-stored CSV files using the `LOAD DATA LOCAL INFILE` command. This is a lot faster than using the Table Data Import Wizard.
+- Use the `create_database` SQL file to create the schema and relevant tables, as well as load the data from the CSV files.
+
+### My SQL Workbench Troubleshooting
+- Inconsistencies were encountered when using the Glue crawler to scan the data uploaded to RDS using My SQL Workbench. The following commands verified the tables were created successfully:
+    - `SHOW TABLES FROM your_database_name;` shows how the tables are named.
+    - `SHOW FULL TABLES WHERE Table_type = 'BASE TABLE';` ensures the tables are standard InnoDB tables.
+
+## Streamlit (Visualization)
+- The data from Glue ETL job saves the final fact table in S3 in the form of several parquet files. Since the data volume is small, Streamlit is a simpler, more cost-efficient tool to use than using Amazon Redshift and Quicksight. Tools such as `duckdb` and `pyarrow` can be used to query data across all parquet files in the S3 directory where the Glue job is saving the data.
+- Create a `streamlit_app.py` file to store all of the logic needed to establish a connection with S3, query the data, and create the dashboards.
+- Create an access key for `streamlit-restaurant-app-user`. These credentials will be used to add secrets to the Streamlit app.
+- Create a `dea-streamlit-restaurant-sales-metrics-analytics` Streamlit app:
+    - Under Secrets, add the following TOML:
+        ```
+        AWS_ACCESS_KEY_ID = "<streamlit_user_access_key_id>"
+        AWS_SECRET_ACCESS_KEY = "<streamlit_user_secret_access_key>"
+        AWS_DEFAULT_REGION = "us-east-1"
+        ```
+
+## Data Discovery
+- order_items:
+    - **Description: Transaction-level data for each item in a customer's order.**
+    - app_name: string - Name of the ordering platform or channel used.
+        - All orders seem to be made through "Alltown Fresh".
+    - restaurant_jd: string/int - Unique identifier for the restaurant.
+    - creation_time_utc: timestamp - UTC timestamp of when the order was placed.
+        - All orders made in 2023 and 2024.
+        - Retrieve the date from the timestamp and use to join with date_dim.
+    - order_id: string/int (PK) - Unique identifier for an order
+    - user_id: string/int - Unique identifier for the customer.
+        - Not always present. Filter out records with null user_id.
+    - is_loyalty: boolean - Flag indicating loyalty membership.
+    - currency: string - Currency of the transaction (e.g. USD).
+    - lineitem_id string/int (FK) - Unique identifier for the specific item in the order.
+    - item_category: string - Category of the item (e.g. beverage, entree).
+    - item_name: string - Name of the item.
+    - item_price: decimal - Unit price of the item.
+    - item_quantity: integer - Quantity of the item purchased.
+- order_item_options:
+    - **Description: Details add-ons, customizations, or modifiers associated with order items.**
+    - order_id: string/int - Identifier linked to the parent order.
+    -lineitem_id: string/int - Identifier linked to the order item.
+    - option_group_name: string - Group category for the option (e.g. size, topping).
+    - option_price: decimal - Price of the option (negative if it's a discount).
+        - Don't appear to be discounts.
+    - option_quantity: integer - Number of times the option was added.
+- date: dim
+    - **Description: Used for time-based joins and calendar aggregations.**
+    - date_key: date - Full calendar date.
+        - Date information only available for 2023.
+    - day_of_week: string - Day of week (e.g. Monday).
+    - week: int - Week number in the year.
+    - month: string - Month name (e.g. January).
+    - year: int - Calendar year.
+    - is_weekend: boolean - Whether the date falls on a weekend.
+    - is_holiday: boolean - Whether the date falls on a holiday.
+    - holiday_name: string - Name of holiday.
+- master_table
+    - Join order_items, order_item_options, and date_dim using left join.
+    - Filter out rows with null user_id.
+    - Add the following user-level properties:
+        - day
+        - week (optional)
+        - month
+        - year
+        - CLV number and category
+        - R, F, and M scores
+        - average order gap
+        - days since last order
+- sales_fact_df_final:
+    - USER_ID - ID of the user.
+    - year - Year of the order.
+    - month - Month of the order.
+    - date_key - Date of the order.
+    - ORDER_ID - Unique identifier of the order.
+    - LINEITEM_ID - Unique identifier of the order item.
+    - APP_NAME -  Name of the app used to place the order.
+    - RESTAURANT_ID - Unique ID of the restaurant where the order was placed.
+    - CREATION_TIME_UTC - Creation timestamp of the entire order.
+    - PRINTED_CARD_NUMBER - Tokenized loyalty card number.
+    - IS_LOYALTY - Whether a user is loyal.
+    - CURRENCY - Currency of the transaction.
+    - ITEM_CATEGORY - Category of the item purchased.
+    - ITEM_NAME - Name of the item purchased.
+    - ITEM_PRICE - Price of the item purchased.
+    - ITEM_QUANTITY - Quantity of the item purchased.
+    - OPTION_GROUP_NAME - Name of the option category, if applicable (e.g. size, topping).
+    - OPTION_NAME - Name of the option, if applicable (e.g. small, medium).
+    - OPTION_PRICE - Price of the option, if applicable.
+    - OPTION_QUANTITY - Number of times the option was added to the order/line item, if applicable.
+    - week - Week number of the order (1 - 52).
+    - day_of_week - Weekday of the order.
+    - is_weekend - Whether the weekday was on a weekend.
+    - is_holiday - Whether the day was a holiday.
+    - holiday_name - Name of the holiday, if applicable.
+    - day - Day of the month the order was placed (1 - 31)
+    - historical_user_revenue - Total user revenue for entire data set.
+    - total_user_orders - Total number of orders placed by the user for the entire data set.
+    - first_order_date - First order date of the user for the entire data set.
+    - last_order_date - Last order date of the user for the entire data set.
+    - avg_user_order_value - Average order value of a given user for the entire data set.
+    - avg_orders_per_user - Average order count of all users for the entire data set.
+    - avg_order_value_per_user - Average order value of all users for the entire data set
+    - avg_customer_lifespan_days - Average lifespan of all users for the entire data set.
+    - customer_lifetime_value - CLV score of a user based on the entire data set.
+    - clv_segment_label - CLV segment of a user based on the entire data set.
+    - monthly_order_count - Order count of a user for a given year and month.
+    - monthly_revenue - Total revenue of a user for a given year and month.
+    - days_since_last_order - Days since a user's last order (based on the date of the last recorded order in the data set).
+    - monthly_recency_score - Recency score (Low, High) of a user based on days_since_last_order.
+    - monthly_frequency_score - Frequency score (Low, High) of a user based on monthly_order_count (based on entire data set, not year).
+    - monthly_monetary_score - Monetary score (Low, High) of a user based on monthly revenue (based on entire data set, not year).
+    - Monthly_VIP_Status - A user's VIP status (True, False).
+    - Monthly_New_Customer_Status - Whether a user is new (based on days_since_last_order) (True False).
+    - Monthly_Churn_Risk_Status - Whether a user is at risk of churning (True, False).
+
+## Metrics Calculations
+- Customer Lifetime Value (CLV):
+    - Calculate Total Order Revenue:
+        - Left Join `order_items` with `order_item_options`.
+        - Group by order_id, user_id, creation_time_utc.
+        - Base Revenue = item_price * item_quantity
+        - Options Revenue = option_price * option_quantity (using coalesce to account for nulls (items without added options))
+        - Total Order Value = Base Revenue + Options Revenue
+    - Aggregate Historical Revenue per User:
+        - Group by user_id.
+        - Total Historical Revenue = SUM(Total Order Value)
+        - Total Orders = COUNT(DISTINCT order_id)
+        - First Order Date = MIN(creation_time_utc)
+        - Last Order Date = MAX(creation_time_utc)
+        - Average Order Value = Total Historical Revenue / Total Orders
+    - Determine Global Constants:
+        - Average Purchase Frequency = AVG(Total Orders)
+        - Global AOV = AVG(Average Order Value)
+        - Average Customer Lifespan = AVG(Last Order Date - First Order Date)
+    - Apply CLV Formula:
+        - Cross Join 'Aggregate Historical Revenue per User' and 'Global Constants'.
+            - Cross joining here is ok because the Global Constants only contains one row.
+        - Historical CLV = Total Historical Revenue
+        - Predictive CLV = Average Order Value * Average Purchase Frequency * Average Customer Lifespan
+    - Assign a CLV score (High, Medium, Low) to each user:
+        - High = Top 20%
+        - Medium = Middle 60%
+        - Low = Bottom 20%
+- Recency, Frequency, and Monetary (RFM):
+    - Calculate Days Since Last Order:
+        - Left Join `order_items` with `order_item_options`.
+        - Find the most recent order date by calculating MAX(creation_time_utc). Add this as a column.
+        - Group `order_items` by user_id.
+        - Find the user's most recent order date by calculating MAX(creation_time_utc).
+        - Find the difference, in days, between the most recent order and a user's last order. Add this as a column.
+    - Calculate Total Monthly Orders
+        - Group `order_items` by user_id, YEAR(creation_time_utc), and MONTH(creation_time_utc).
+        - Calculate COUNT(order_id).
+    - Calculate Total Monthly Spend:
+        - Group `order_items` by user_id, YEAR(creation_time_utc), and MONTH(creation_time_utc).
+        - Calculate SUM(Total Order Value).
+    - Find a way to join the above tables based on user_id, year, and month.
+    - Add columns for R, F, and M scores (High or Low) for each user.
+- Churn Indicators:
+    - Calculate Days Since Last Order:
+        - Find the most recent order date by calculating MAX(creation_time_utc). Add this as a column.
+        - Group `order_items` by user_id.
+        - Find the user's most recent order date by calculating MAX(creation_time_utc).
+        - Find the difference, in days, between the most recent order and a user's last order. Add this as a column.
+    - Calculate Gap Between Orders:
+        - Filter `order_items` by selecting distinct order_id and user_id (each order with add-ons has an accompanying line item id).
+        - Order by user_id and creation_time_utc
+        - Use `LAG` to calculate the gap between each user's order (will be null for the first order).
+    - Use a customer's order gap to categorize them as 'at risk' if the days since last order is > 45 days.
+- Sales Trend Monitoring (Athena):
+    - Aggregate total order revenue by day, week, month, and year.
+    - Break down revenue totals by:
+        - Location
+        - Menu category
+        - Time of day
+        - Whether the day is a holiday
+- Loyalty Program Impact (Athena):
+    - Compare the following metrics (aggregated by year and month) for loyalty vs. non-loyalty customers:
+        - Average spend
+        - Repeat orders
+        - Lifetime value
+- Location Performance (Athena):
+    - Group orders by restaurant_id and calculate the following:
+        - Total revenue
+        - Average order value
+        - Average order gap
+        - Orders per day/week
+    - Rank locations based on total revenue
+- Pricing and Discount Effectiveness (Athena):
+    - Group items by price into buckets of $100 and calculate the following:
+        - Total revenue.
+
+## Dashboard Calculations
+- Customer Segmentation:
+    - Use pie charts to show how total revenue is divided among the following customer segments:
+        - R, F, and M values.
+        - Loyalty status.
+        - CLV score.
+        - Churn risk.
+- Churn Risk Indicators:
+    - Use a bar graph to review the following for customers who are vs. aren't at risk of churn:
+        - Days since last order
+        - Average order interval
+        - Total spend
+- Sales Trend and Seasonality:
+    - Use line graphs to show daily/monthly/yearly sales trends.
+    - Use bar graphs to show seasonal sales trends.
+    - Allow filtering by product category (restaurants don't have a location like city/state/country).
+    - For monthly sales, try to indicate if the sales day is a holiday (using a bar graph).
+- Loyalty Program Impact:
+    - Look at how loyalty program status affects the following metrics:
+        - CLV
+        - Average order value
+        - Average order gap
+- Location Performance:
+    - Determine the top and bottom 10 restaurants in terms of total revenue. Compare the following metrics:
+        - Total revenue
+        - Average order value
+        - Average order gap
+        - Orders per day/week

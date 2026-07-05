@@ -1,0 +1,9 @@
+streamlit
+calendar
+duckdb
+pyarrow
+pandas
+plotly
+altair
+matplotlib
+seaborn

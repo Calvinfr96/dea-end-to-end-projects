@@ -3,8 +3,8 @@ import snowflake.connector
 
 # Gets the version
 ctx = snowflake.connector.connect(
-    user='calvinfr2', # Username
-    password='iw4tZnxAtQ2E9pg', # Password
+    user='<username>', # Username
+    password='<password>', # Password
     account='TFFSMHD-PW10337' # Account identifier
     )
 cs = ctx.cursor()
