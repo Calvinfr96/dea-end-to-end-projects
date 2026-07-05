@@ -16,6 +16,10 @@ Design a pipeline architecture for ingesting, transforming, and storing data. De
 - Designed primarily using AWS resources.
 - Implement logic using PySpark.
 
+**Stramlit App URL:** https://dea-restaurant-metrics-analytics-calvinfr.streamlit.app/
+
+**Streamlit App Repo:** https://github.com/Calvinfr96/dea-streamlit-restaurant-metrics-analytics
+
 ## Metrics and Required Insights
 - Customer Lifetime Value (CLV):
     - The total projected revenue or net profit a business expects to earn from a single customer throughout their entire relationship.
