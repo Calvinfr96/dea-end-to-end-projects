@@ -88,8 +88,16 @@ This project will use AWS services to build a system that automates the capture 
 - CI/CD and Dev Ops: GitHub Actions
     - Seamlessly integrates with AWS and automatically updates infrastructure, ingestion scripts, and transformation scripts whenever a commit is pushed to the source repository.
 - Error Handling:
+    - If the Lambda code crashes due to network timeouts, unhandled syntax errors, or downstream API disconnects (such as Slack being down), the state engine flags that execution as `Failed`.
+    - The Step Functions Console generates an interactive, color-coded node execution log. Red steps clearly indicate exactly which state broke, accompanied by a complete stack trace of the JavaScript exception,
+    - Because each file drop instantiates a completely separated, decoupled workflow execution, a single bad file payload will never jam or block other incoming leads from processing simultaneously.
 - Retries:
+    - The Lambda function is configured with a 15-minute runtime cutoff. This guarantees it will cleanly exit instead of running indefinitely and over-billing your account if a public HTTP request stalls.
+    - If an execution fails because an external resource was missing (e.g., your Lambda function looked for a public `.json` file that hadn't finished writing yet), the failed workflow can be re-driven to re-run the step with the exact same payload.
+    - The Lambda invocation step function can be automatically retried before failing.
 - Logging:
+    - Everything written using standard JavaScript outputs (`console.log`, `console.error`, `console.warn`) inside your Node.js code is intercepted and securely routed directly to an automatically managed CloudWatch Log Group named `/aws/lambda/LeadProcessorLambda`.
+    - Because the file paths are predictably derived directly from the payload string (`crm_event_{lead_id}.json`), CloudWatch logs can be searched using a specific `lead_id` to quickly locate the entire processing timeline across S3, Step Functions, and Slack.
 
 ## Resources
 - Requirements: https://docs.google.com/document/d/1n1AD0sULjwy0omQO6TmM2hcTEEZahyiqqr53Ju6N-bM/edit?tab=t.0

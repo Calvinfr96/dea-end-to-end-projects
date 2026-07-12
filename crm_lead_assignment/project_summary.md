@@ -12,6 +12,7 @@
     ├── cdk.json
     └── package.json
     ```
+    - URL: https://github.com/Calvinfr96/dea-crm-lead-assignment-code-pipeline
 - Deployments can be automated using GitHub Actions Workflow, instead of using a the native AWS CodePipeline. Doing so is recommended because it keeps your CI/CD configuration right alongside the code in your repository. To create this workflow, follow these steps:
     1. Create a `deploy.yml` file at the root of the repository in the following directory: `.github/workflows/deploy.yml`. This script uses AWS OIDC (OpenID Connect) federation, which allows GitHub to safely assume an AWS IAM Role via temporary tokens instead of storing long-lived, high-risk access keys.
     1. AWS OIDC Setup:
