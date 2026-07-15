@@ -79,7 +79,7 @@ This project will use AWS services to build an automated data engineering pipeli
         1. Optional Line Chart: Weekly trend per employee.
         1. Data Requirements: employee_id, meeting_id, meeting_date.
 
-**Stramlit App URL:** https://dea-restaurant-metrics-analytics-calvinfr.streamlit.app/
+**Stramlit App URL:** https://dea-calendly-metrics-analytics-calvinfr.streamlit.app/
 
 **Streamlit App Repo:** https://github.com/Calvinfr96/dea-streamlit-calendly-metrics-analytics
 
